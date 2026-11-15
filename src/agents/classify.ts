@@ -8,7 +8,8 @@
  * - Known AI agents, signed agents and automated-looking clients may get Dedica's agent version.
  */
 
-import type { Detection, Twins } from "./types";
+import { USER_AGENT_MAX } from "../env";
+import type { Detection } from "../types";
 
 interface Needle {
   n: string;
@@ -29,11 +30,9 @@ function needles(d: Detection): Needle[] {
   return indexed;
 }
 
-/** Longer user agents are cut before any matching, so a policy pattern never runs over an attacker-sized string. */
-export const UA_MATCH_MAX = 512;
-
+/** The user agent every list is matched against: cut to USER_AGENT_MAX and lowercased. */
 export function userAgent(headers: Headers): string {
-  return (headers.get("user-agent") ?? "").slice(0, UA_MATCH_MAX).toLowerCase();
+  return (headers.get("user-agent") ?? "").slice(0, USER_AGENT_MAX).toLowerCase();
 }
 
 /** The longest user-agent needle in the user agent, if any. */
@@ -52,7 +51,8 @@ export function isBrowserNavigation(headers: Headers): boolean {
 }
 
 const regexCache = new Map<string, RegExp | null>();
-function compiled(pattern: string | undefined): RegExp | null {
+/** A policy pattern as a RegExp, or null when it is empty or invalid. */
+function regex(pattern: string | undefined): RegExp | null {
   if (!pattern) return null;
   if (!regexCache.has(pattern)) {
     let re: RegExp | null = null;
@@ -90,7 +90,7 @@ function classify(headers: Headers, d: Detection): Classification {
     if (hit) return { reason: hit.traditional ? "traditional" : "agent", matched: hit.n, signatureAgent };
   }
   if (signatureAgent) return { reason: "signed", matched: signatureAgent, signatureAgent };
-  if (ua && !headers.has("sec-fetch-mode") && compiled(d.botLikePattern)?.test(ua)) {
+  if (ua && !headers.has("sec-fetch-mode") && regex(d.botLikePattern)?.test(ua)) {
     return { reason: "botlike", matched: null, signatureAgent: null };
   }
   return { reason: null, matched: null, signatureAgent: null };
@@ -125,37 +125,5 @@ export function keepHumanPage(ua: string, d: Detection, asksQuestion: boolean): 
   const action = veto.exact.find(([needle]) => ua === needle)?.[1] ?? veto.contains.find(([needle]) => ua.includes(needle))?.[1];
   if (action === "human") return true;
   if (action === "agent") return false;
-  return !asksQuestion && (action === "question" || Boolean(ua && compiled(veto.botLikePattern)?.test(ua)));
+  return !asksQuestion && (action === "question" || Boolean(ua && regex(veto.botLikePattern)?.test(ua)));
 }
-
-/** The policy's include/exclude paths for agent versions of pages (by path prefix). */
-export function twinEligible(pathname: string, twins: Twins): boolean {
-  const matches = (p: string) => pathname === p || pathname.startsWith(p.endsWith("/") ? p : `${p}/`);
-  if ((twins.excludePaths ?? []).some(matches)) return false;
-  const include = twins.includePaths ?? [];
-  return include.length === 0 || include.some(matches);
-}
-
-const ASSET_RE = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|eot|map|webp|avif|mp4|webm|mp3|wav|pdf)$/i;
-
-/** Headers that mark an API call, a session, a partial download or a protocol switch: never a page read. */
-const NOT_A_PAGE_HEADERS = ["authorization", "cookie", "upgrade", "range", "x-requested-with"];
-const PAGE_DESTS = new Set(["document", "iframe", "frame"]);
-
-/**
- * Whether a request at a normal URL may get Dedica's agent version at all. Anything that looks like an API call or
- * a page's sub-request always gets the origin's answer, without asking Dedica: a static file, a request carrying
- * credentials, a cookie, a range or an upgrade, a browser's non-page fetch, or an `Accept` that asks for JSON
- * rather than a page.
- */
-export function negotiable(request: Request, pathname: string): boolean {
-  const h = request.headers;
-  if (ASSET_RE.test(pathname)) return false;
-  if (NOT_A_PAGE_HEADERS.some((name) => h.has(name))) return false;
-  const dest = h.get("sec-fetch-dest");
-  if (dest !== null && !PAGE_DESTS.has(dest)) return false;
-  const accept = (h.get("accept") ?? "").toLowerCase();
-  if (accept.includes("json") && !accept.includes("text/html") && !accept.includes("text/markdown")) return false;
-  return true;
-}
-

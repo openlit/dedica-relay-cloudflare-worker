@@ -12,7 +12,7 @@
  * It is never reported: events carry only the verdict.
  */
 
-import type { SignatureAgent, Verification } from "./types";
+import type { SignatureAgent, Verification } from "../types";
 
 export type Tier = "verified" | "claimed" | "impersonator" | "unknown";
 
@@ -104,13 +104,14 @@ export function parseCidr(text: string): Cidr | null {
   return { v6: ip.v6, value: ip.value & mask, mask };
 }
 
-const compiledSets = new WeakMap<object, Cidr[]>();
+const parsedSets = new WeakMap<object, Cidr[]>();
 
-function compiled(set: { cidrs: string[] }): Cidr[] {
-  let cidrs = compiledSets.get(set);
+/** A set's ranges, parsed once per policy. */
+function ranges(set: { cidrs: string[] }): Cidr[] {
+  let cidrs = parsedSets.get(set);
   if (!cidrs) {
     cidrs = set.cidrs.map(parseCidr).filter((c): c is Cidr => c !== null);
-    compiledSets.set(set, cidrs);
+    parsedSets.set(set, cidrs);
   }
   return cidrs;
 }
@@ -146,7 +147,7 @@ export function ipTier(v: Verification, agent: string, clientIp: string | null, 
   const sets = (v.agentIpSets[agent] ?? []).map((id) => v.ipSets[id]).filter((s) => s !== undefined && fresh(s.fetchedAt, v, now));
   const ip = clientIp ? parseIp(clientIp) : null;
   if (sets.length === 0 || !ip) return "claimed";
-  return sets.some((s) => inRanges(ip, compiled(s))) ? "verified" : "impersonator";
+  return sets.some((s) => inRanges(ip, ranges(s))) ? "verified" : "impersonator";
 }
 
 // ---------------------------------------------------------------------------------------------------------------

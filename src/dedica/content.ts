@@ -4,16 +4,16 @@
  * anything else, including Dedica being slow or down, falls back to the origin.
  */
 
-import { readCapped } from "./body";
-import { CATEGORY_HEADER, CONTENT_FALLBACK_HEADER, SERVED_HEADER, SERVE_TIMEOUT_MS, VERSION_HEADER, dedicaInit } from "./env";
-import type { FetchFn } from "./policy";
-import type { Env, Policy } from "./types";
+import { readCapped } from "../body";
+import { CATEGORY_HEADER, CONTENT_FALLBACK_HEADER, SERVED_HEADER, SERVE_TIMEOUT_MS, VERSION_HEADER, dedicaInit } from "../env";
+import type { Env, FetchFn, Policy } from "../types";
 
 export const MAX_SERVED_BYTES = 8 * 1024 * 1024;
 const BODY_DEADLINE_MS = 10_000;
 const SERVE_BACKOFF_MS = 15_000;
 
-export interface ServeInput {
+/** Which file to ask Dedica for. */
+export interface ContentInput {
   path: string;
   search?: string;
   version?: string;
@@ -23,9 +23,11 @@ export interface ServeInput {
   timeoutMs?: number;
 }
 
-export class Server {
+/** Dedica's content endpoint (`policy.serve`), with its back-off. One per Edge. */
+export class ContentClient {
   private backoffUntil = 0;
-  private identity = "";
+  /** The `serve.baseUrl` the back-off belongs to: a new one starts clean. */
+  private baseUrl = "";
   /** Shared by every call in flight: one failure aborts them all, so a stalled Dedica holds no request longer. */
   private circuit = new AbortController();
 
@@ -42,11 +44,11 @@ export class Server {
   }
 
   /** The Dedica URL for a path on the customer's domain, or null (serving off, backing off, or an unsafe path). */
-  target(policy: Policy, input: ServeInput): { url: string; version: string } | null {
+  target(policy: Policy, input: ContentInput): { url: string; version: string } | null {
     const serve = policy.serve;
     if (!serve) return null;
-    if (serve.baseUrl !== this.identity) {
-      this.identity = serve.baseUrl;
+    if (serve.baseUrl !== this.baseUrl) {
+      this.baseUrl = serve.baseUrl;
       this.backoffUntil = 0;
     }
     if (this.now() < this.backoffUntil) return null;
@@ -68,7 +70,7 @@ export class Server {
     return { url: next.toString(), version: `v1:${input.version || serve.version}` };
   }
 
-  async fromDedica(policy: Policy, env: Env, input: ServeInput, contentType: string, shared: boolean, request: Request): Promise<Response | null> {
+  async fromDedica(policy: Policy, env: Env, input: ContentInput, contentType: string, shared: boolean, request: Request): Promise<Response | null> {
     const target = this.target(policy, input);
     if (!target) return null;
 

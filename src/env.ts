@@ -18,6 +18,10 @@ export const ORIGIN_FETCH_HEADER = "x-dedica-origin-fetch";
 /** On a Dedica response, `origin`: Dedica declines this request, and the origin answers it instead. */
 export const CONTENT_FALLBACK_HEADER = "x-dedica-content-fallback";
 
+/** Longer user agents are cut before any matching or reporting, so a policy pattern never runs over an
+ *  attacker-sized string. */
+export const USER_AGENT_MAX = 512;
+
 /** The settings format this worker understands. Anything else is ignored safely. */
 export const SCHEMA_MAJOR = 1;
 

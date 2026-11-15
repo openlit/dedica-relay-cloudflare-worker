@@ -12,12 +12,12 @@
  *   and path only. Cookies and the token are never sent.
  */
 
-import type { BlockRule } from "./access";
-import { clientMatch, type ClientMatch } from "./detect";
-import type { Identity, Tier } from "./identity";
-import { EVENTS_TIMEOUT_MS, SERVED_HEADER, dedicaInit, dedicaUrl } from "./env";
-import type { FetchFn } from "./policy";
-import type { Ctx, Env, Policy } from "./types";
+import type { BlockRule } from "../agents/access";
+import { type ClientMatch, clientMatch } from "../agents/classify";
+import type { Identity, Tier } from "../agents/identity";
+import { EVENTS_TIMEOUT_MS, SERVED_HEADER, USER_AGENT_MAX, dedicaInit, dedicaUrl } from "../env";
+import { isPageDestination, isStaticFile } from "../page";
+import type { Ctx, Env, FetchFn, Policy } from "../types";
 
 /** What the worker did with a request. */
 export type Outcome =
@@ -75,24 +75,15 @@ export const MAX_AGE_MS = 5000;
 /** How many unsent events an isolate keeps while Dedica is unavailable. */
 export const MAX_BUFFERED = MAX_BATCH * 5;
 
-const USER_AGENT_MAX = 512;
 const PATH_MAX = 2048;
 const QUERY_MAX = 2048;
-const ASSET_EXTENSIONS = new Set([
-  "js", "mjs", "css", "map", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "ico",
-  "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "wav",
-]); // prettier-ignore
-const PAGE_DESTINATIONS = new Set(["document", "iframe", "frame"]);
 /** The only query parameters reported (plus the policy's question parameters): how a visit from an AI answer is attributed. */
 const KEEP_PARAMS = ["utm_source", "utm_medium", "utm_campaign", "ref", "source"];
 const REPORTED_HEADERS = ["accept", "accept-language", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-site"];
 
 /** Whether a request is a page load worth reporting: not a static file, a browser sub-request or a prefetch. */
 export function isReportable(url: URL, headers: Headers): boolean {
-  const dot = url.pathname.lastIndexOf(".");
-  if (dot > url.pathname.lastIndexOf("/") && ASSET_EXTENSIONS.has(url.pathname.slice(dot + 1).toLowerCase())) return false;
-  const dest = headers.get("sec-fetch-dest");
-  if (dest !== null && !PAGE_DESTINATIONS.has(dest)) return false;
+  if (isStaticFile(url.pathname) || !isPageDestination(headers)) return false;
   return !`${headers.get("sec-purpose") ?? ""} ${headers.get("purpose") ?? ""}`.includes("prefetch");
 }
 

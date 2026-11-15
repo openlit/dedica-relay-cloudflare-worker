@@ -7,9 +7,9 @@
  * returns null, and the origin answers. Dedica's own answers, errors included, are relayed as they are.
  */
 
-import { readCapped } from "./body";
-import { CONTENT_FALLBACK_HEADER, apiBase, dedicaHeaders } from "./env";
-import type { Env, Policy } from "./types";
+import { readCapped } from "../body";
+import { CONTENT_FALLBACK_HEADER, SERVED_HEADER, apiBase, dedicaHeaders } from "../env";
+import type { Env, FetchFn, Policy } from "../types";
 
 const PROXY_BODY_MAX = 32_768;
 const PROXY_TIMEOUT_MS = 50_000;
@@ -17,7 +17,7 @@ const PROXY_TIMEOUT_MS = 50_000;
 const normalPath = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, "") : path);
 
 /** The only origins a request may be proxied to: the pinned DEDICA_QUERY_ORIGIN, else DEDICA_API_URL's. */
-export function proxyTarget(targetUrl: string, env: Env): URL | null {
+export function allowedTarget(targetUrl: string, env: Env): URL | null {
   try {
     const target = new URL(targetUrl);
     const allowed = new URL(env.DEDICA_QUERY_ORIGIN || apiBase(env));
@@ -44,12 +44,12 @@ export async function proxyRequest(
   url: URL,
   policy: Policy | null,
   env: Env,
-  fetchFn: (url: string, init: RequestInit) => Promise<Response>,
+  fetchFn: FetchFn,
 ): Promise<Response | null> {
   if (!env.DEDICA_MIDDLEWARE_TOKEN) return null;
   const targetUrl = proxyTargetUrl(url, request.method, policy);
   if (targetUrl === null || url.search.length > PROXY_BODY_MAX) return null;
-  const target = proxyTarget(targetUrl, env);
+  const target = allowedTarget(targetUrl, env);
   if (!target) return null;
   target.search = url.search;
   // A clone, so the origin still gets the body if Dedica doesn't answer.
@@ -93,7 +93,7 @@ async function forward(
   request: Request,
   target: string,
   env: Env,
-  fetchFn: (url: string, init: RequestInit) => Promise<Response>,
+  fetchFn: FetchFn,
 ): Promise<Response | null> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -120,7 +120,7 @@ async function forward(
       void upstream.body?.cancel().catch(() => {});
       return null;
     }
-    const headers =new Headers({ "cache-control": "private, no-store", "x-dedica-served": "1", "x-accel-buffering": "no" });
+    const headers = new Headers({ "cache-control": "private, no-store", [SERVED_HEADER]: "1", "x-accel-buffering": "no" });
     for (const name of ["content-type", "retry-after", "allow", "mcp-protocol-version", "mcp-session-id", "vary"]) {
       const value = upstream.headers.get(name);
       if (value) headers.set(name, value);

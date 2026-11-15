@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { detectAgent, isTraditionalBot, keepHumanPage, twinEligible } from "../src/detect";
+import { detectAgent, isTraditionalBot, keepHumanPage } from "../src/agents/classify";
+import { twinEligible } from "../src/page";
 import { BROWSER_UA, GOOGLEBOT_UA, GPTBOT_UA, browserHeaders, get, policy } from "./helpers";
 
 const d = policy().detection;

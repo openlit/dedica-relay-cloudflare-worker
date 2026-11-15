@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { routeFor } from "../src/access";
-import { claimedAgent, identify, ipTier, parseCidr, parseIp, parseSignatureInput, verifiedSigner } from "../src/identity";
-import { sanitizePolicy } from "../src/policy";
+import { routeFor } from "../src/agents/access";
+import { claimedAgent, identify, ipTier, parseCidr, parseIp, parseSignatureInput, verifiedSigner } from "../src/agents/identity";
+import { sanitizePolicy } from "../src/dedica/policy-schema";
 import type { Access, Policy, Verification } from "../src/types";
 import { API, BROWSER_UA, FakeCtx, GOOGLEBOT_UA, GPTBOT_UA, SITE, browserHeaders, env, eventBodies, get, harness, policy } from "./helpers";
 

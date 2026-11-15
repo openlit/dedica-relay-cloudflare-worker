@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { TRANSMITTER } from "../src/env";
-import { Server } from "../src/serve";
+import { ContentClient } from "../src/dedica/content";
 import type { Proxy } from "../src/types";
 import {
   API,
@@ -229,7 +229,7 @@ describe("discovery files and agent extras", () => {
 });
 
 describe("serve target", () => {
-  const server = new Server(async () => new Response());
+  const server = new ContentClient(async () => new Response());
   const p = policy();
   it("keeps paths inside the serve base", () => {
     expect(server.target(p, { path: "/docs/a.md", search: "?q=1" })?.url).toBe(`${API}/api/v1/middleware/serve/docs/a.md?q=1`);

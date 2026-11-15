@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NEGOTIATE_TIMEOUT_MS } from "../src/env";
-import { sanitizePolicy } from "../src/policy";
+import { sanitizePolicy } from "../src/dedica/policy-schema";
 import fixture from "./policy.fixture.json";
 import { API, FakeCtx, GPTBOT_UA, env, get, harness, policy, serveCalls } from "./helpers";
 

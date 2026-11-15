@@ -36,12 +36,12 @@ has a timeout; anything unexpected (Dedica slow, down, no content for a path) fa
 
 When the policy carries an `access` section (protocol section 5a), the worker:
 
-- **verifies who a bot is**, in every mode (`src/identity.ts`): a user agent naming a bot is checked against the IP
+- **verifies who a bot is**, in every mode (`src/agents/identity.ts`): a user agent naming a bot is checked against the IP
   ranges its vendor publishes, and a Web Bot Auth signature (RFC 9421, Ed25519) against the signing agent's keys. Each
   event reports `verified`, `claimed`, `impersonator` or `unknown` and the agent it names. The client IP is used only
   in memory and is never reported. Ranges older than the policy's `maxAgeSeconds` prove nothing (`claimed`);
 - **blocks** the bots the site blocks, in `autopilot` and only while the policy says the rules are enforced
-  (`src/access.ts`): impersonators (if the site blocks them), search engines and previews blocked by name, then AI
+  (`src/agents/access.ts`): impersonators (if the site blocks them), search engines and previews blocked by name, then AI
   agents and tools by user agent (never a search engine, never a browser navigation), then agents proven by a
   signature. Each gets `403 Not available to this client.`, reported with `block_rule`. Artifacts are answered first,
   so a blocked crawler can still read robots.txt. The same rules run on the paths proxied to Dedica (`/ask`, `/mcp`),
@@ -60,7 +60,7 @@ Older policies (no `access`) block nothing and add no verdicts, and a malformed 
 
 ## Traffic reporting
 
-The worker reports every page load to Dedica, from people, AI agents and bots alike (`src/analytics.ts`), so Dedica can
+The worker reports every page load to Dedica, from people, AI agents and bots alike (`src/dedica/events.ts`), so Dedica can
 show how much of your traffic is agents. Static files, a page's sub-requests (images, scripts, XHR) and prefetches are
 not reported, and neither is Dedica's own crawler.
 
@@ -134,9 +134,25 @@ npm run typecheck
 npm test            # vitest, in Node; Dedica and the origin are fakes
 echo 'DEDICA_MIDDLEWARE_TOKEN=dm_...' > .dev.vars
 npx wrangler dev --var DEDICA_SITE_ID:<site id> --var DEDICA_API_URL:http://localhost:8000
+npm run smoke       # the built worker in workerd (the real runtime), against a fake Dedica and origin
 ```
 
-`src/`: `index.ts` (entry: default handler only), `edge.ts` (request order, heartbeat), `policy.ts` (cache and backoff), `detect.ts` (agent
-detection), `serve.ts` (serving from Dedica), `proxy.ts` (paths proxied to Dedica: `/ask`, `/mcp`), `analytics.ts` (traffic reporting), `body.ts` (capped body reads),
-`env.ts` (constants and Dedica call helpers), `types.ts`.
+Where things are:
+
+| File | What it holds |
+|---|---|
+| `src/index.ts` | Entry: the default handler only. |
+| `src/edge.ts` | Wiring: status, kill switch, installation proof, carrying out a decision, reporting, heartbeat. |
+| `src/decide.ts` | **The request order** (SPEC section 6): what a request gets, decided without calling anything. Start here. |
+| `src/page.ts` | What kind of request it is: a static file, a page read, an eligible path. |
+| `src/agents/classify.ts` | Who the client looks like, from the policy's lists (search engine, AI agent, automated). |
+| `src/agents/identity.ts` | Who a bot really is: IP ranges and Web Bot Auth signatures. |
+| `src/agents/access.ts` | Agent Access: block rules and route rules. |
+| `src/dedica/policy-schema.ts` | The policy, validated into the shape the worker relies on. |
+| `src/dedica/policy-store.ts` | The policy's cache, refresh and back-off. |
+| `src/dedica/content.ts` | Fetching files from Dedica (`policy.serve`): artifacts and markdown versions. |
+| `src/dedica/proxy.ts` | Paths proxied to Dedica (`/ask`, `/mcp`). |
+| `src/dedica/events.ts` | Traffic reporting. |
+| `src/env.ts`, `src/types.ts`, `src/body.ts` | Constants and Dedica call helpers; types; capped body reads. |
+
 `test/policy.fixture.json` is a real policy from the backend (the backend tests check it still matches).

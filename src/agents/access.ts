@@ -18,9 +18,9 @@
  * The same rules guard the paths proxied to Dedica (`/ask`, `/mcp`), where a blocked bot gets a JSON 403.
  */
 
-import { detectAgent, isBrowserNavigation, isTraditionalBot } from "./detect";
+import { detectAgent, isBrowserNavigation, isTraditionalBot } from "./classify";
 import type { Identity } from "./identity";
-import type { Policy, RouteRule } from "./types";
+import type { Policy, RouteRule } from "../types";
 
 /** Which rule answered 403: `crawler` is a user-agent match, `signature` an agent proven by its signature. */
 export type BlockRule = "impersonator" | "serve_human" | "crawler" | "signature" | "route";

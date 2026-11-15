@@ -1,9 +1,19 @@
-/** All per-isolate state and request handling of the worker (see index.ts for what it does). */
+/**
+ * The worker's wiring: per-isolate state, the steps before the policy (status, kill switch, installation proof),
+ * carrying out what `decide.ts` decided, and reporting. What a request gets is decided in decide.ts, not here.
+ */
 
+import { BLOCKED_BODY } from "./agents/access";
+import { clientMatch, userAgent } from "./agents/classify";
+import { type Identity, identify } from "./agents/identity";
+import { type Blocked, type Content, type PageDecision, TEXT, type Visit, decide, decideForDedicaCrawler } from "./decide";
+import { ContentClient } from "./dedica/content";
+import { Reporter, type Trace, buildEvent, isReportable } from "./dedica/events";
+import { PolicyStore } from "./dedica/policy-store";
+import { proxyRequest } from "./dedica/proxy";
 import {
   HEARTBEAT_TIMEOUT_MS,
   MIDDLEWARE,
-  NEGOTIATE_TIMEOUT_MS,
   ORIGIN_FETCH_HEADER,
   STATUS_PATH,
   VERSION,
@@ -13,16 +23,7 @@ import {
   dedicaUrl,
   disabled,
 } from "./env";
-import { BLOCKED_BODY, type BlockRule, accessBlock, routeForRequest } from "./access";
-import { Reporter, type Trace, buildEvent, isReportable } from "./analytics";
-import { clientMatch, detectAgent, isTraditionalBot, keepHumanPage, negotiable, twinEligible, userAgent } from "./detect";
-import { type Identity, identify } from "./identity";
-import { type FetchFn, PolicyStore } from "./policy";
-import { proxyRequest, proxyTargetUrl } from "./proxy";
-import { Server } from "./serve";
-import type { Artifact, Ctx, Env, Policy } from "./types";
-
-const TEXT = "text/plain; charset=utf-8";
+import type { Ctx, Env, FetchFn, Policy } from "./types";
 
 export interface EdgeOptions {
   /** Calls to Dedica (and nothing else). */
@@ -34,32 +35,15 @@ export interface EdgeOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** What the worker needs to know about a request, worked out once. */
-interface Visit {
-  request: Request;
-  url: URL;
-  /** Lowercased user agent. */
-  ua: string;
-  /** `Accept: text/markdown`. */
-  acceptsMarkdown: boolean;
-  /** Who the client really is (Agent Access), worked out at most once, and only when something needs it. */
-  identity: (p: Policy | null) => Promise<Identity | null>;
-}
-
-/** How a request was answered. `response` is null only for `human_page`: the origin still has to answer. */
-interface Served extends Trace {
-  response: Response | null;
-}
-
-/** Dedica's response as a served answer, or null when Dedica had none (and the origin answers). */
-function served(outcome: Trace["outcome"], category: Trace["category"], response: Response | null): Served | null {
-  return response && { response, outcome, category };
+/** The response a request gets, and how it came about (for the traffic event). */
+interface Answer extends Trace {
+  response: Response;
 }
 
 /** All per-isolate state of the worker. Tests build their own; the deployed worker uses one. */
 export class Edge {
   readonly policies: PolicyStore;
-  private readonly server: Server;
+  private readonly content: ContentClient;
   private readonly dedicaFetch: FetchFn;
   private readonly originFetch: (request: Request) => Promise<Response>;
   private readonly now: () => number;
@@ -70,7 +54,7 @@ export class Edge {
     this.originFetch = options.originFetch ?? ((request) => fetch(request));
     this.now = options.now ?? Date.now;
     this.policies = new PolicyStore(this.dedicaFetch, this.now);
-    this.server = new Server(this.dedicaFetch, this.now);
+    this.content = new ContentClient(this.dedicaFetch, this.now);
     this.reporter = new Reporter(this.dedicaFetch, options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))));
   }
 
@@ -79,7 +63,7 @@ export class Edge {
     ctx.passThroughOnException?.();
     const url = new URL(request.url);
 
-    // Read-only configuration check: no secrets, no calls to Dedica. Answers even when disabled, to show it.
+    // 1. Read-only configuration check: no secrets, no calls to Dedica. Answers even when disabled, to show it.
     if (request.method === "GET" && url.pathname === STATUS_PATH) {
       return Response.json(
         {
@@ -92,16 +76,17 @@ export class Edge {
         { headers: { "cache-control": "no-store" } },
       );
     }
-    // Kill switch: everything goes to the origin untouched, unreported, with no call to Dedica.
+    // 2. Kill switch: everything goes to the origin untouched, unreported, with no call to Dedica.
     if (disabled(env)) return this.originFetch(request);
 
+    // 3. Installation proof.
     if (request.method === "GET" && url.pathname === WELL_KNOWN_PATH) {
       return Response.json(
         { site_id: env.DEDICA_SITE_ID ?? null, middleware: MIDDLEWARE, version: VERSION },
         { headers: { "cache-control": "no-store" } },
       );
     }
-    // Not set up yet: pass straight through, unreported.
+    // 4. Not set up yet: pass straight through, unreported.
     if (!configured(env)) return this.originFetch(request);
 
     const startedAt = this.now();
@@ -119,7 +104,7 @@ export class Edge {
         return identity;
       },
     };
-    // Dedica's own crawler reading the origin's page: never Dedica's content, and unreported. The header proves
+    // 5. Dedica's own crawler reading the origin's page: never Dedica's content, and unreported. The header proves
     // nothing (anyone can send it), so it never skips Agent Access: a blocked bot sending it is still blocked.
     if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") {
       const blocked = await this.crawlerBlock(visit, env, ctx).catch(() => null);
@@ -127,34 +112,83 @@ export class Edge {
       this.report(visit, blocked, env, ctx, startedAt);
       return blocked.response;
     }
+    // 6. Everyone else: Dedica's answer if decide.ts says so and Dedica has one, else the origin's.
     const answer = await this.answer(visit, env, ctx);
     this.report(visit, answer, env, ctx, startedAt);
     return answer.response;
   }
 
   /** Agent Access for a request marked as Dedica's crawler: the same rules as for anyone. */
-  private async crawlerBlock(visit: Visit, env: Env, ctx: Ctx): Promise<(Served & { response: Response }) | null> {
+  private async crawlerBlock(visit: Visit, env: Env, ctx: Ctx): Promise<Answer | null> {
     if (visit.request.method !== "GET" && visit.request.method !== "HEAD") return null;
-    const p = await this.policies.get(env, ctx);
-    if (!p) return null;
-    const rule = await accessBlock(visit.request.headers, visit.ua, visit.url.pathname, p, () => visit.identity(p));
-    return rule ? blockedPage(rule) : null;
+    const decision = await decideForDedicaCrawler(visit, await this.policies.get(env, ctx));
+    return decision.kind === "blocked" ? blockedAnswer(decision) : null;
   }
 
-  /** Dedica's answer, else the origin's, returned untouched. */
-  private async answer(visit: Visit, env: Env, ctx: Ctx): Promise<Served & { response: Response }> {
-    const fromDedica = await this.serve(visit, env, ctx).catch((error: unknown) => {
+  /** Dedica's answer, else the origin's, returned untouched. Any failure on Dedica's side ends at the origin. */
+  private async answer(visit: Visit, env: Env, ctx: Ctx): Promise<Answer> {
+    const fromDedica = await this.fromDedica(visit, env, ctx).catch((error: unknown) => {
       console.warn(`[dedica] serving failed; using origin: ${error}`);
-      return null;
+      return "origin" as const;
     });
-    if (fromDedica?.response) return { ...fromDedica, response: fromDedica.response };
-
-    const response = await this.originFetch(visit.request);
-    return { response, outcome: fromDedica?.outcome === "human_page" ? "human_page" : "origin", category: null };
+    if (typeof fromDedica !== "string") return fromDedica;
+    return { response: await this.originFetch(visit.request), outcome: fromDedica, category: null };
   }
 
-  /** Reports the request to Dedica in the background, batched (see analytics.ts). Never throws. */
-  private report(visit: Visit, answer: Served & { response: Response }, env: Env, ctx: Ctx, startedAt: number): void {
+  /** Decides (decide.ts) and carries the decision out. A string means the origin answers, reported as that. */
+  private async fromDedica(visit: Visit, env: Env, ctx: Ctx): Promise<Answer | "origin" | "human_page"> {
+    // Every request waits for a missing policy (at most POLICY_TIMEOUT_MS, shared by all requests waiting on it),
+    // so a cold isolate answers the same as a warm one. Without a policy, the origin answers.
+    const p = await this.policies.get(env, ctx);
+
+    let decision = await decide(visit, p);
+    if (decision.kind === "proxy") {
+      const response = await proxyRequest(visit.request, visit.url, p, env, this.dedicaFetch);
+      if (response) return { response, outcome: "proxied", category: null };
+      decision = await decision.otherwise();
+    }
+    return this.carryOut(decision, visit.request, p, env);
+  }
+
+  private async carryOut(decision: PageDecision, request: Request, p: Policy | null, env: Env): Promise<Answer | "origin" | "human_page"> {
+    switch (decision.kind) {
+      case "origin":
+        return decision.outcome;
+      case "blocked":
+        return blockedAnswer(decision);
+      case "artifact_blocked":
+        return { response: new Response(BLOCKED_BODY, { status: 403 }), outcome: "blocked", category: "public" };
+      case "content": {
+        if (!p) return "origin";
+        if (decision.originFirst) return this.originFirst(decision, request, p, env);
+        const response = await this.fetchContent(decision, request, p, env);
+        return response ? { response, outcome: decision.outcome, category: decision.input.category } : "origin";
+      }
+    }
+  }
+
+  /** A `fallback` artifact: the origin's own file when it has one, else Dedica's, else the origin's answer after all. */
+  private async originFirst(decision: Content, request: Request, p: Policy, env: Env): Promise<Answer> {
+    const origin = await this.originFetch(request).catch(() => null);
+    if (!(origin && originHasFile(origin))) {
+      const fromDedica = await this.fetchContent(decision, request, p, env).catch((error: unknown) => {
+        console.warn(`[dedica] serving failed; using origin: ${error}`);
+        return null;
+      });
+      if (fromDedica) {
+        void origin?.body?.cancel().catch(() => {});
+        return { response: fromDedica, outcome: "artifact", category: "public" };
+      }
+    }
+    return { response: origin ?? (await this.originFetch(request)), outcome: "artifact_origin", category: "public" };
+  }
+
+  private fetchContent(decision: Content, request: Request, p: Policy, env: Env): Promise<Response | null> {
+    return this.content.fromDedica(p, env, decision.input, decision.contentType, decision.shared, request);
+  }
+
+  /** Reports the request to Dedica in the background, batched (see dedica/events.ts). Never throws. */
+  private report(visit: Visit, answer: Answer, env: Env, ctx: Ctx, startedAt: number): void {
     try {
       if (!isReportable(visit.url, visit.request.headers)) return;
       const policy = this.policies.policy;
@@ -168,103 +202,6 @@ export class Edge {
     } catch (error) {
       console.warn(`[dedica] event report skipped: ${error}`);
     }
-  }
-
-  /** What Dedica answers for this request, in order, or null and the origin answers. */
-  private async serve(visit: Visit, env: Env, ctx: Ctx): Promise<Served | null> {
-    const { request, url, ua } = visit;
-
-    // Every request waits for a missing policy (at most POLICY_TIMEOUT_MS, shared by all requests waiting on it),
-    // so a cold isolate answers the same as a warm one. Without a policy, the origin answers.
-    const p = await this.policies.get(env, ctx);
-
-    // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
-    //    A bot the site's Agent Access rules block gets a JSON 403 here, before anything reaches Dedica, and a
-    //    `passthrough` route leaves the path to the origin (the site's own `/mcp`, say).
-    if (p && proxyTargetUrl(url, request.method, p) !== null) {
-      const blockRule = await accessBlock(request.headers, ua, url.pathname, p, () => visit.identity(p));
-      if (blockRule) {
-        const body = { error: "QUERY_FORBIDDEN", message: BLOCKED_BODY };
-        return { response: Response.json(body, { status: 403, headers: { "cache-control": "no-store" } }), outcome: "blocked", category: null, blockRule };
-      }
-      if (routeForRequest(p, url.pathname)?.action === "passthrough") return null;
-    }
-    const proxied = await proxyRequest(request, url, p, env, this.dedicaFetch);
-    if (proxied) return { response: proxied, outcome: "proxied", category: null };
-    if (request.method !== "GET" && request.method !== "HEAD") return null;
-    if (!p || p.mode !== "autopilot") return null;
-
-    // 2. A file Dedica manages (llms.txt, ...), for every visitor.
-    const artifact = p.artifacts.find((a) => a.path === url.pathname);
-    if (artifact) return this.artifact(p, env, artifact, request);
-
-    // 3. Agent Access: a bot this site blocks, or a route it blocks for agents (see access.ts). A `passthrough`
-    //    route leaves the path, and its `.md` version, to the origin. Proxied paths were checked in step 1.
-    const blockRule = await accessBlock(request.headers, ua, url.pathname, p, () => visit.identity(p));
-    if (blockRule) return blockedPage(blockRule);
-    if (routeForRequest(p, url.pathname)?.action === "passthrough") return null;
-
-    const questionParams = p.twins.questionParams ?? [];
-    const asksQuestion =
-      questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
-
-    // 4. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask a question.
-    if (keepHumanPage(ua, p.detection, asksQuestion)) return { response: null, outcome: "human_page", category: null };
-
-    // 5. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
-    //    personal, so it is never shared-cached.
-    if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
-      const page = url.pathname.slice(0, -p.twins.suffix.length) || "/";
-      if (!twinEligible(page, p.twins)) return null;
-      const shared = !questionParams.some((key) => url.searchParams.has(key));
-      const input = { path: url.pathname, search: url.search, category: "public" } as const;
-      return served("twin", "public", await this.server.fromDedica(p, env, input, TEXT, shared, request));
-    }
-
-    // 6. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
-    //    Never for a search engine, an API call or a page's sub-request (see `negotiable`), and never a long wait:
-    //    the client asked for the origin's page. If Dedica has none for the page, the origin answers.
-    if (!p.twins.negotiate || !negotiable(request, url.pathname)) return null;
-    const wantsAgentVersion = visit.acceptsMarkdown || detectAgent(request.headers, p.detection);
-    if (!isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins) && wantsAgentVersion) {
-      const input = { path: url.pathname, search: url.search, category: "eligible", timeoutMs: NEGOTIATE_TIMEOUT_MS } as const;
-      return served("negotiated", "eligible", await this.server.fromDedica(p, env, input, TEXT, false, request));
-    }
-    return null;
-  }
-
-  private async artifact(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Served | null> {
-    switch (artifact.action ?? "proxy") {
-      case "proxy":
-        return served("artifact", "public", await this.artifactFromDedica(p, env, artifact, request));
-      case "fallback":
-        return this.fallback(p, env, artifact, request);
-      case "block":
-        return { response: new Response("Not available to this client.", { status: 403 }), outcome: "blocked", category: "public" };
-      default:
-        return null;
-    }
-  }
-
-  /** The origin's own file when it has one, else Dedica's, else the origin's answer after all. */
-  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Served> {
-    const origin = await this.originFetch(request).catch(() => null);
-    if (!(origin && originHasFile(origin))) {
-      const fromDedica = await this.artifactFromDedica(p, env, artifact, request).catch((error: unknown) => {
-        console.warn(`[dedica] serving failed; using origin: ${error}`);
-        return null;
-      });
-      if (fromDedica) {
-        void origin?.body?.cancel().catch(() => {});
-        return { response: fromDedica, outcome: "artifact", category: "public" };
-      }
-    }
-    return { response: origin ?? (await this.originFetch(request)), outcome: "artifact_origin", category: "public" };
-  }
-
-  private artifactFromDedica(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Response | null> {
-    const input = { path: artifact.path, version: artifact.version, category: "public" } as const;
-    return this.server.fromDedica(p, env, input, artifact.contentType, true, request);
   }
 
   async heartbeat(env: Env): Promise<void> {
@@ -292,11 +229,15 @@ export class Edge {
   }
 }
 
-/** The 403 a blocked request gets on a page. Never cached: it is for this client only, and a cache that kept it
- *  would show it to everyone else at the URL. */
-function blockedPage(blockRule: BlockRule): Served & { response: Response } {
-  const response = new Response(BLOCKED_BODY, { status: 403, headers: { "content-type": TEXT, "cache-control": "no-store" } });
-  return { response, outcome: "blocked", category: null, blockRule };
+/** The 403 an Agent Access rule answers. Never cached: it is for this client only, and a cache that kept it would
+ *  show it to everyone else at the URL. */
+function blockedAnswer(decision: Blocked): Answer {
+  const headers = { "cache-control": "no-store" };
+  const response =
+    decision.reply === "json"
+      ? Response.json({ error: "QUERY_FORBIDDEN", message: BLOCKED_BODY }, { status: 403, headers })
+      : new Response(BLOCKED_BODY, { status: 403, headers: { "content-type": TEXT, ...headers } });
+  return { response, outcome: "blocked", category: null, blockRule: decision.rule };
 }
 
 /** A real file at the origin: any redirect, or a 2xx that isn't an HTML page (a single-page app answers every path). */

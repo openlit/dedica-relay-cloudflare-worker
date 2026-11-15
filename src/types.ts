@@ -22,6 +22,9 @@ export interface Ctx {
   passThroughOnException?(): void;
 }
 
+/** A call to Dedica (tests pass a fake). */
+export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+
 export type PagePreference = "human" | "agent" | "question";
 
 export interface Detection {
