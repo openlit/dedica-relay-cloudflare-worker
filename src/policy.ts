@@ -10,7 +10,7 @@
  */
 
 import { POLICY_TIMEOUT_MS, SCHEMA_MAJOR, dedicaInit, dedicaUrl } from "./env";
-import type { Artifact, Ctx, Detection, Env, PagePreference, Policy, Proxy, Twins } from "./types";
+import type { Access, Artifact, RouteRule, Ctx, Detection, Env, PagePreference, Policy, Proxy, SignatureAgent, Twins, Verification } from "./types";
 
 export const POLICY_FAILURE_GRACE_MS = 30_000;
 export const POLICY_OUTAGE_MAX_MS = 15 * 60_000;
@@ -86,6 +86,71 @@ function proxies(v: unknown): Proxy[] {
   });
 }
 
+function pairs(v: unknown): [string, string][] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (pair): pair is [string, string] =>
+      Array.isArray(pair) && typeof pair[0] === "string" && pair[0].length > 0 && typeof pair[1] === "string" && pair[1].length > 0,
+  );
+}
+
+function verification(v: unknown): Verification | null {
+  if (!isObject(v)) return null;
+  const maxAge = typeof v.maxAgeSeconds === "number" && Number.isFinite(v.maxAgeSeconds) && v.maxAgeSeconds > 0 ? v.maxAgeSeconds : 0;
+  const ipSets: Verification["ipSets"] = {};
+  if (isObject(v.ipSets)) {
+    for (const [id, set] of Object.entries(v.ipSets)) {
+      if (isObject(set) && typeof set.fetchedAt === "string") ipSets[id] = { cidrs: strings(set.cidrs), fetchedAt: set.fetchedAt };
+    }
+  }
+  const agentIpSets: Verification["agentIpSets"] = {};
+  if (isObject(v.agentIpSets)) {
+    for (const [key, ids] of Object.entries(v.agentIpSets)) agentIpSets[key] = strings(ids);
+  }
+  const signatureAgents: SignatureAgent[] = Array.isArray(v.signatureAgents)
+    ? v.signatureAgents.filter(isObject).flatMap((s): SignatureAgent[] => {
+        if (typeof s.signatureAgent !== "string" || typeof s.fetchedAt !== "string" || !Array.isArray(s.keys)) return [];
+        const keys = s.keys.filter(isObject).flatMap((k) =>
+          typeof k.kid === "string" && typeof k.x === "string"
+            ? [{ kid: k.kid, x: k.x, nbf: typeof k.nbf === "number" ? k.nbf : null, exp: typeof k.exp === "number" ? k.exp : null }]
+            : [],
+        );
+        return [{ signatureAgent: s.signatureAgent.toLowerCase(), agents: strings(s.agents), fetchedAt: s.fetchedAt, keys }];
+      })
+    : [];
+  // Without a usable age limit nothing can be trusted, so nothing is verified (and nobody is an impersonator).
+  if (maxAge === 0) return null;
+  return { maxAgeSeconds: maxAge, claims: pairs(v.claims), claimsExact: pairs(v.claimsExact), agentIpSets, ipSets, signatureAgents };
+}
+
+/** Path rules. One this worker doesn't understand (another kind or action, a path that isn't a path) is skipped,
+ *  never guessed. */
+function routes(v: unknown): RouteRule[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(isObject).flatMap((r): RouteRule[] => {
+    const kind = r.kind === "exact" || r.kind === "prefix" ? r.kind : null;
+    const action = r.action === "block" || r.action === "passthrough" ? r.action : null;
+    if (!kind || !action || typeof r.path !== "string" || !/^\/[^?#\s]*$/.test(r.path)) return [];
+    return [{ id: typeof r.id === "string" ? r.id : "", kind, path: r.path, action }];
+  });
+}
+
+/** Agent Access, or null. A malformed section can only block less: unknown values block nothing. */
+function access(v: unknown): Access | null {
+  if (!isObject(v)) return null;
+  return {
+    enforce: v.enforce === true,
+    impersonators: v.impersonators === "block" ? "block" : "flag",
+    blockedAgentUa: strings(v.blockedAgentUa),
+    blockedAgentUaExact: strings(v.blockedAgentUaExact),
+    blockedServeHumanUa: strings(v.blockedServeHumanUa),
+    blockedServeHumanUaExact: strings(v.blockedServeHumanUaExact),
+    blockedAgentKeys: strings(v.blockedAgentKeys),
+    routes: routes(v.routes),
+    verification: verification(v.verification),
+  };
+}
+
 function serve(v: unknown): Policy["serve"] {
   if (!isObject(v) || typeof v.baseUrl !== "string" || typeof v.version !== "string") return null;
   try {
@@ -116,6 +181,7 @@ export function sanitizePolicy(raw: unknown): Policy | null {
     artifacts: artifacts(raw.artifacts),
     serve: serve(raw.serve),
     proxies: proxies(raw.proxies),
+    access: access(raw.access),
   };
 }
 

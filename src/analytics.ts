@@ -12,7 +12,9 @@
  *   and path only. Cookies and the token are never sent.
  */
 
+import type { BlockRule } from "./access";
 import { clientMatch, type ClientMatch } from "./detect";
+import type { Identity, Tier } from "./identity";
 import { EVENTS_TIMEOUT_MS, SERVED_HEADER, dedicaInit, dedicaUrl } from "./env";
 import type { FetchFn } from "./policy";
 import type { Ctx, Env, Policy } from "./types";
@@ -22,7 +24,7 @@ export type Outcome =
   | "proxied" // a path the policy proxies to Dedica (`/mcp`, `/ask`, ...)
   | "artifact" // a file Dedica manages (`/llms.txt`, ...), from Dedica
   | "artifact_origin" // a `fallback` file the origin has itself
-  | "blocked" // a file the policy blocks
+  | "blocked" // a file the policy blocks, or a bot the site's Agent Access rules block
   | "twin" // an explicit markdown URL (`/pricing.md`)
   | "negotiated" // the agent version of a normal page URL
   | "human_page" // a search engine, preview or unknown crawler kept the normal page
@@ -32,6 +34,8 @@ export type Outcome =
 export interface Trace {
   outcome: Outcome;
   category: "public" | "eligible" | null;
+  /** The Agent Access rule that answered 403, if any. */
+  blockRule?: BlockRule;
 }
 
 export interface TrafficEvent {
@@ -47,7 +51,16 @@ export interface TrafficEvent {
   served_by_dedica: boolean;
   category: "public" | "eligible" | null;
   /** Null when the worker has no policy yet (the detection lists come from it). */
-  client: { kind: ClientMatch["kind"]; matched: string | null; signature_agent: string | null } | null;
+  client: {
+    kind: ClientMatch["kind"];
+    matched: string | null;
+    signature_agent: string | null;
+    /** Who the bot really is (Agent Access); absent without verification data in the policy. Never the IP. */
+    verification?: Tier;
+    /** The catalog key of the agent the verification named. */
+    agent?: string | null;
+  } | null;
+  block_rule?: BlockRule;
   user_agent: string;
   referer?: string;
   visitor?: string;
@@ -142,9 +155,11 @@ export async function buildEvent(
   env: Env,
   startedAt: number,
   now: number,
+  identity: Identity | null = null,
 ): Promise<TrafficEvent> {
   const url = new URL(request.url);
   const client = policy ? clientMatch(request.headers, policy.detection) : null;
+  const verdict = identity ? { verification: identity.tier, agent: identity.agent } : {};
   const headers: Record<string, string> = {};
   for (const name of REPORTED_HEADERS) {
     const value = request.headers.get(name);
@@ -164,7 +179,8 @@ export async function buildEvent(
     outcome: trace.outcome,
     served_by_dedica: response.headers.get(SERVED_HEADER) === "1" || trace.outcome === "proxied" || trace.outcome === "blocked",
     category: trace.category,
-    client: client && { kind: client.kind, matched: client.matched, signature_agent: client.signatureAgent },
+    client: client && { kind: client.kind, matched: client.matched, signature_agent: client.signatureAgent, ...verdict },
+    block_rule: trace.blockRule,
     user_agent: (request.headers.get("user-agent") ?? "").slice(0, USER_AGENT_MAX),
     referer: refererOf(request.headers),
     visitor: await visitorHash(request.headers, env, now),

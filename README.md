@@ -32,6 +32,32 @@ has a timeout; anything unexpected (Dedica slow, down, no content for a path) fa
 - **Kill switch:** set the variable `DEDICA_DISABLED=1` and the worker passes every request straight to your
   origin, untouched and unreported, with no calls to Dedica. `/__dedica/status` shows `"disabled": true`.
 
+## Agent Access (1.4.0)
+
+When the policy carries an `access` section (protocol section 5a), the worker:
+
+- **verifies who a bot is**, in every mode (`src/identity.ts`): a user agent naming a bot is checked against the IP
+  ranges its vendor publishes, and a Web Bot Auth signature (RFC 9421, Ed25519) against the signing agent's keys. Each
+  event reports `verified`, `claimed`, `impersonator` or `unknown` and the agent it names. The client IP is used only
+  in memory and is never reported. Ranges older than the policy's `maxAgeSeconds` prove nothing (`claimed`);
+- **blocks** the bots the site blocks, in `autopilot` and only while the policy says the rules are enforced
+  (`src/access.ts`): impersonators (if the site blocks them), search engines and previews blocked by name, then AI
+  agents and tools by user agent (never a search engine, never a browser navigation), then agents proven by a
+  signature. Each gets `403 Not available to this client.`, reported with `block_rule`. Artifacts are answered first,
+  so a blocked crawler can still read robots.txt. The same rules run on the paths proxied to Dedica (`/ask`, `/mcp`),
+  where a blocked bot gets a JSON `403` (`QUERY_FORBIDDEN`) and nothing is sent to Dedica. Nothing is exempt by user
+  agent or header: `X-Dedica-Origin-Fetch` only keeps Dedica's content away from the crawler, and a blocked bot sending
+  it still gets the 403. Dedica's own clients are simply never on a block list;
+- **path rules** (`access.routes`): `block` answers detected AI agents 403 on a path (and its `.md`, and `/ask` or
+  `/mcp`), `passthrough` leaves the path to your origin with no agent version. Exact beats prefix, a longer prefix a
+  shorter one, slashes normalised; a rule this worker doesn't understand is skipped;
+- **verifies signatures strictly**: `tag="web-bot-auth"`, both `created` and `expires`, and coverage of `@authority`
+  and `signature-agent` are required, so a signature can't be replayed on another site or forever;
+- robots.txt needs nothing new: Dedica serves the whole file (your own rules, then the groups for blocked bots) as an
+  ordinary `proxy` artifact, and your origin's file answers whenever Dedica has none.
+
+Older policies (no `access`) block nothing and add no verdicts, and a malformed `access` section can only block less.
+
 ## Traffic reporting
 
 The worker reports every page load to Dedica, from people, AI agents and bots alike (`src/analytics.ts`), so Dedica can
