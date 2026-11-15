@@ -22,7 +22,8 @@ import { detectAgent, isBrowserNavigation, isTraditionalBot } from "./detect";
 import type { Identity } from "./identity";
 import type { Policy, RouteRule } from "./types";
 
-export type BlockRule = "impersonator" | "serve_human" | "crawler" | "route";
+/** Which rule answered 403: `crawler` is a user-agent match, `signature` an agent proven by its signature. */
+export type BlockRule = "impersonator" | "serve_human" | "crawler" | "signature" | "route";
 
 export const BLOCKED_BODY = "Not available to this client.";
 
@@ -82,7 +83,7 @@ export async function accessBlock(
   if (!traditional && !isBrowserNavigation(headers) && matches(ua, a.blockedAgentUa, a.blockedAgentUaExact)) return "crawler";
   if (a.blockedAgentKeys.length > 0 && headers.has("signature-agent")) {
     const who = await identity();
-    if (who?.signed && who.agent && a.blockedAgentKeys.includes(who.agent)) return "crawler";
+    if (who?.signed && who.agent && a.blockedAgentKeys.includes(who.agent)) return "signature";
   }
   if (routeForRequest(p, pathname)?.action === "block" && !traditional && detectAgent(headers, p.detection)) return "route";
   return null;

@@ -292,9 +292,10 @@ export class Edge {
   }
 }
 
-/** The 403 a blocked request gets on a page. */
+/** The 403 a blocked request gets on a page. Never cached: it is for this client only, and a cache that kept it
+ *  would show it to everyone else at the URL. */
 function blockedPage(blockRule: BlockRule): Served & { response: Response } {
-  const response = new Response(BLOCKED_BODY, { status: 403, headers: { "content-type": TEXT } });
+  const response = new Response(BLOCKED_BODY, { status: 403, headers: { "content-type": TEXT, "cache-control": "no-store" } });
   return { response, outcome: "blocked", category: null, blockRule };
 }
 

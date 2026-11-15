@@ -432,7 +432,7 @@ Checked in this order; the first that applies blocks the request:
 | 1 | `impersonators` is `block`, and the verdict is `impersonator` | `impersonator` |
 | 2 | The UA equals a `blockedServeHumanUaExact` entry or contains a `blockedServeHumanUa` needle (search engines, previews, monitors blocked by name) | `serve_human` |
 | 3 | The client is not a search engine, the request is not a browser navigation, and the UA equals a `blockedAgentUaExact` entry or contains a `blockedAgentUa` needle | `crawler` |
-| 4 | `blockedAgentKeys` is non-empty, the request has a `Signature-Agent` header, its verdict is signed-verified, and the verified agent is in `blockedAgentKeys` | `crawler` |
+| 4 | `blockedAgentKeys` is non-empty, the request has a `Signature-Agent` header, its verdict is signed-verified, and the verified agent is in `blockedAgentKeys` | `signature` |
 | 5 | The route rule for the path (5.3) is `block`, the client is not a search engine, and it wants the agent version (4.2) | `route` |
 
 Rules 1–2 and 4 apply whatever the request looks like. No header or user agent exempts a request.
@@ -561,7 +561,7 @@ recorded).
 
 | Case | Status | Body | Headers |
 |---|---|---|---|
-| Blocked (5.2) on a page or by step 5 | 403 | `Not available to this client.` | `content-type: text/plain; charset=utf-8` |
+| Blocked (5.2) on a page or by step 5 | 403 | `Not available to this client.` | `content-type: text/plain; charset=utf-8`, `cache-control: no-store` |
 | Blocked (5.2) on a proxied path | 403 | `{"error":"QUERY_FORBIDDEN","message":"Not available to this client."}` | `content-type: application/json`, `cache-control: no-store` |
 | Artifact with action `block` | 403 | `Not available to this client.` | `content-type: text/plain;charset=UTF-8` |
 | Status check | 200 | JSON (step 1) | `cache-control: no-store` |
@@ -603,7 +603,7 @@ All methods are reported (e.g. `POST /mcp`).
 | `served_by_dedica` | `true` when the response carries `x-dedica-served: 1`, or the outcome is `proxied` or `blocked` |
 | `category` | `public` (`artifact`, `artifact_origin`, artifact `block`, `twin`), `eligible` (`negotiated`), otherwise `null` |
 | `client` | `null` when the instance holds no policy (see below). Otherwise `kind`: `ai_agent` (AI agent or signed agent, 4.1), `bot` (search engine or automated client), `unknown`; `matched`: what decided it, or `null`; `signature_agent`: the recognised signing domain, or `null`; `verification` and `agent`: the verdict and its agent key (4.7), only when there is a verdict. |
-| `block_rule` | the 5.2 rule that blocked it; only for Agent Access blocks |
+| `block_rule` | the 5.2 rule that blocked it (`impersonator`, `serve_human`, `crawler`, `signature` or `route`); only for Agent Access blocks |
 | `user_agent` | the `User-Agent` header as sent, at most 512 characters |
 | `referer` | the `Referer`'s origin and path only, at most 2048 characters; absent when missing or invalid |
 | `visitor` | daily pseudonym: SHA-256 (hex) of `<client IP>|<User-Agent>|<UTC date YYYY-MM-DD>|<DEDICA_SALT>`. Absent without `DEDICA_SALT` or without a client IP. |

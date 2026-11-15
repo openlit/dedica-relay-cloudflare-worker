@@ -175,6 +175,7 @@ describe("Agent Access enforcement", () => {
     const { res, events, originCalls } = await run(get("/pricing", { "user-agent": GPTBOT_UA, "cf-connecting-ip": OPENAI_IP }), p);
     expect(res.status).toBe(403);
     expect(await res.text()).toBe("Not available to this client.");
+    expect(res.headers.get("cache-control")).toBe("no-store");
     expect(originCalls).toHaveLength(0);
     expect(events[0]).toMatchObject({ outcome: "blocked", block_rule: "crawler", client: { verification: "verified", agent: "gptbot" } });
     expect(JSON.stringify(events[0])).not.toContain(OPENAI_IP);
@@ -296,7 +297,7 @@ describe("signed agents", () => {
     const v = verification({ signatureAgents: [{ signatureAgent: "chatgpt.com", agents: ["chatgpt-agent"], fetchedAt: FRESH, keys: [{ kid: "k1", x }] }] });
     const { res, events } = await run(request, withAccess(access({ verification: v, blockedAgentKeys: ["chatgpt-agent"] })));
     expect(res.status).toBe(403);
-    expect(events[0]).toMatchObject({ block_rule: "crawler", client: { verification: "verified", agent: "chatgpt-agent" } });
+    expect(events[0]).toMatchObject({ block_rule: "signature", client: { verification: "verified", agent: "chatgpt-agent" } });
   });
 });
 
