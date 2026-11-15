@@ -13,10 +13,12 @@ import {
   dedicaUrl,
   disabled,
 } from "./env";
+import { BLOCKED_BODY, type BlockRule, accessBlock, routeForRequest } from "./access";
 import { Reporter, type Trace, buildEvent, isReportable } from "./analytics";
-import { detectAgent, isTraditionalBot, keepHumanPage, negotiable, twinEligible, userAgent } from "./detect";
+import { clientMatch, detectAgent, isTraditionalBot, keepHumanPage, negotiable, twinEligible, userAgent } from "./detect";
+import { type Identity, identify } from "./identity";
 import { type FetchFn, PolicyStore } from "./policy";
-import { proxyRequest } from "./proxy";
+import { proxyRequest, proxyTargetUrl } from "./proxy";
 import { Server } from "./serve";
 import type { Artifact, Ctx, Env, Policy } from "./types";
 
@@ -40,6 +42,8 @@ interface Visit {
   ua: string;
   /** `Accept: text/markdown`. */
   acceptsMarkdown: boolean;
+  /** Who the client really is (Agent Access), worked out at most once, and only when something needs it. */
+  identity: (p: Policy | null) => Promise<Identity | null>;
 }
 
 /** How a request was answered. `response` is null only for `human_page`: the origin still has to answer. */
@@ -97,19 +101,44 @@ export class Edge {
         { headers: { "cache-control": "no-store" } },
       );
     }
-    // Not set up yet, or Dedica's own crawler reading the origin's page: pass straight through, unreported.
-    if (!configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return this.originFetch(request);
+    // Not set up yet: pass straight through, unreported.
+    if (!configured(env)) return this.originFetch(request);
 
     const startedAt = this.now();
+    const ua = userAgent(request.headers);
+    let identity: Promise<Identity | null> | null = null;
     const visit: Visit = {
       request,
       url,
-      ua: userAgent(request.headers),
+      ua,
       acceptsMarkdown: (request.headers.get("accept") ?? "").includes("text/markdown"),
+      identity: (p) => {
+        identity ??= p?.access?.verification
+          ? identify(p.access.verification, request, ua, clientMatch(request.headers, p.detection).kind !== "unknown", this.now()).catch(() => null)
+          : Promise.resolve(null);
+        return identity;
+      },
     };
+    // Dedica's own crawler reading the origin's page: never Dedica's content, and unreported. The header proves
+    // nothing (anyone can send it), so it never skips Agent Access: a blocked bot sending it is still blocked.
+    if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") {
+      const blocked = await this.crawlerBlock(visit, env, ctx).catch(() => null);
+      if (!blocked) return this.originFetch(request);
+      this.report(visit, blocked, env, ctx, startedAt);
+      return blocked.response;
+    }
     const answer = await this.answer(visit, env, ctx);
     this.report(visit, answer, env, ctx, startedAt);
     return answer.response;
+  }
+
+  /** Agent Access for a request marked as Dedica's crawler: the same rules as for anyone. */
+  private async crawlerBlock(visit: Visit, env: Env, ctx: Ctx): Promise<(Served & { response: Response }) | null> {
+    if (visit.request.method !== "GET" && visit.request.method !== "HEAD") return null;
+    const p = await this.policies.get(env, ctx);
+    if (!p) return null;
+    const rule = await accessBlock(visit.request.headers, visit.ua, visit.url.pathname, p, () => visit.identity(p));
+    return rule ? blockedPage(rule) : null;
   }
 
   /** Dedica's answer, else the origin's, returned untouched. */
@@ -128,8 +157,11 @@ export class Edge {
   private report(visit: Visit, answer: Served & { response: Response }, env: Env, ctx: Ctx, startedAt: number): void {
     try {
       if (!isReportable(visit.url, visit.request.headers)) return;
+      const policy = this.policies.policy;
       ctx.waitUntil(
-        buildEvent(visit.request, answer.response, answer, this.policies.policy, env, startedAt, this.now())
+        visit
+          .identity(policy)
+          .then((identity) => buildEvent(visit.request, answer.response, answer, policy, env, startedAt, this.now(), identity))
           .then((event) => this.reporter.add(event, env, ctx))
           .catch((error: unknown) => console.warn(`[dedica] event report skipped: ${error}`)),
       );
@@ -147,6 +179,16 @@ export class Edge {
     const p = await this.policies.get(env, ctx);
 
     // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
+    //    A bot the site's Agent Access rules block gets a JSON 403 here, before anything reaches Dedica, and a
+    //    `passthrough` route leaves the path to the origin (the site's own `/mcp`, say).
+    if (p && proxyTargetUrl(url, request.method, p) !== null) {
+      const blockRule = await accessBlock(request.headers, ua, url.pathname, p, () => visit.identity(p));
+      if (blockRule) {
+        const body = { error: "QUERY_FORBIDDEN", message: BLOCKED_BODY };
+        return { response: Response.json(body, { status: 403, headers: { "cache-control": "no-store" } }), outcome: "blocked", category: null, blockRule };
+      }
+      if (routeForRequest(p, url.pathname)?.action === "passthrough") return null;
+    }
     const proxied = await proxyRequest(request, url, p, env, this.dedicaFetch);
     if (proxied) return { response: proxied, outcome: "proxied", category: null };
     if (request.method !== "GET" && request.method !== "HEAD") return null;
@@ -156,14 +198,20 @@ export class Edge {
     const artifact = p.artifacts.find((a) => a.path === url.pathname);
     if (artifact) return this.artifact(p, env, artifact, request);
 
+    // 3. Agent Access: a bot this site blocks, or a route it blocks for agents (see access.ts). A `passthrough`
+    //    route leaves the path, and its `.md` version, to the origin. Proxied paths were checked in step 1.
+    const blockRule = await accessBlock(request.headers, ua, url.pathname, p, () => visit.identity(p));
+    if (blockRule) return blockedPage(blockRule);
+    if (routeForRequest(p, url.pathname)?.action === "passthrough") return null;
+
     const questionParams = p.twins.questionParams ?? [];
     const asksQuestion =
       questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
 
-    // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask a question.
+    // 4. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask a question.
     if (keepHumanPage(ua, p.detection, asksQuestion)) return { response: null, outcome: "human_page", category: null };
 
-    // 4. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
+    // 5. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
     //    personal, so it is never shared-cached.
     if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
       const page = url.pathname.slice(0, -p.twins.suffix.length) || "/";
@@ -173,7 +221,7 @@ export class Edge {
       return served("twin", "public", await this.server.fromDedica(p, env, input, TEXT, shared, request));
     }
 
-    // 5. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
+    // 6. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
     //    Never for a search engine, an API call or a page's sub-request (see `negotiable`), and never a long wait:
     //    the client asked for the origin's page. If Dedica has none for the page, the origin answers.
     if (!p.twins.negotiate || !negotiable(request, url.pathname)) return null;
@@ -242,6 +290,12 @@ export class Edge {
       console.warn(`[dedica] heartbeat request failed: ${err}`);
     }
   }
+}
+
+/** The 403 a blocked request gets on a page. */
+function blockedPage(blockRule: BlockRule): Served & { response: Response } {
+  const response = new Response(BLOCKED_BODY, { status: 403, headers: { "content-type": TEXT } });
+  return { response, outcome: "blocked", category: null, blockRule };
 }
 
 /** A real file at the origin: any redirect, or a 2xx that isn't an HTML page (a single-page app answers every path). */

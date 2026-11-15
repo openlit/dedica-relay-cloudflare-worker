@@ -30,6 +30,14 @@ export function proxyTarget(targetUrl: string, env: Env): URL | null {
   }
 }
 
+/** The Dedica URL the policy proxies this path and method to (`/ask`, `/mcp`, ...), or null. */
+export function proxyTargetUrl(url: URL, method: string, policy: Policy | null): string | null {
+  if (!policy || policy.mode !== "autopilot" || !Array.isArray(policy.proxies)) return null;
+  const route = policy.proxies.find((p) => typeof p?.path === "string" && /^\/[^?#\s]+$/.test(p.path) && normalPath(p.path) === normalPath(url.pathname));
+  const targetUrl = route?.targets?.[method];
+  return typeof targetUrl === "string" ? targetUrl : null;
+}
+
 /** Dedica's answer for a proxied path on the customer's domain, or null and the origin answers. */
 export async function proxyRequest(
   request: Request,
@@ -38,10 +46,9 @@ export async function proxyRequest(
   env: Env,
   fetchFn: (url: string, init: RequestInit) => Promise<Response>,
 ): Promise<Response | null> {
-  if (!policy || policy.mode !== "autopilot" || !Array.isArray(policy.proxies) || !env.DEDICA_MIDDLEWARE_TOKEN) return null;
-  const route = policy.proxies.find((p) => typeof p?.path === "string" && /^\/[^?#\s]+$/.test(p.path) && normalPath(p.path) === normalPath(url.pathname));
-  const targetUrl = route?.targets?.[request.method];
-  if (typeof targetUrl !== "string" || url.search.length > PROXY_BODY_MAX) return null;
+  if (!env.DEDICA_MIDDLEWARE_TOKEN) return null;
+  const targetUrl = proxyTargetUrl(url, request.method, policy);
+  if (targetUrl === null || url.search.length > PROXY_BODY_MAX) return null;
   const target = proxyTarget(targetUrl, env);
   if (!target) return null;
   target.search = url.search;

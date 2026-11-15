@@ -51,7 +51,10 @@
     ],
     "traditionalBotsExact": [],
     "agentUa": [
+      "ai2bot",
       "amazonbot",
+      "amzn-searchbot",
+      "amzn-user",
       "anthropic-ai",
       "applebot-extended",
       "bytespider",
@@ -63,18 +66,25 @@
       "claude-web",
       "claudebot",
       "cohere-ai",
+      "cohere-training-data-crawler",
       "diffbot",
       "duckassistbot",
       "gemini-deep-research",
       "google-agent",
+      "google-cloudvertexbot",
       "google-extended",
+      "google-notebooklm",
       "gptbot",
       "meta-externalagent",
       "meta-externalfetcher",
+      "meta-webindexer",
       "mistralai-user",
       "oai-searchbot",
+      "omgilibot",
+      "pangubot",
       "perplexity-user",
       "perplexitybot",
+      "timpibot",
       "youbot"
     ],
     "agentUaExact": [],
@@ -85,6 +95,14 @@
     "humanPageVeto": {
       "exact": [],
       "contains": [
+        [
+          "cohere-training-data-crawler",
+          "agent"
+        ],
+        [
+          "google-cloudvertexbot",
+          "agent"
+        ],
         [
           "google-inspectiontool",
           "human"
@@ -130,6 +148,10 @@
           "human"
         ],
         [
+          "google-notebooklm",
+          "agent"
+        ],
+        [
           "claude-searchbot",
           "agent"
         ],
@@ -139,6 +161,10 @@
         ],
         [
           "google-extended",
+          "agent"
+        ],
+        [
+          "meta-webindexer",
           "agent"
         ],
         [
@@ -156,6 +182,10 @@
         [
           "yandex.com/bots",
           "human"
+        ],
+        [
+          "amzn-searchbot",
+          "agent"
         ],
         [
           "mistralai-user",
@@ -270,6 +300,10 @@
           "agent"
         ],
         [
+          "amzn-user",
+          "agent"
+        ],
+        [
           "claudebot",
           "agent"
         ],
@@ -284,6 +318,10 @@
         [
           "googlebot",
           "human"
+        ],
+        [
+          "omgilibot",
+          "agent"
         ],
         [
           "redditbot",
@@ -318,12 +356,20 @@
           "human"
         ],
         [
+          "pangubot",
+          "agent"
+        ],
+        [
           "site24x7",
           "human"
         ],
         [
           "slackbot",
           "human"
+        ],
+        [
+          "timpibot",
+          "agent"
         ],
         [
           "bingbot",
@@ -340,6 +386,10 @@
         [
           "pingdom",
           "human"
+        ],
+        [
+          "ai2bot",
+          "agent"
         ],
         [
           "gptbot",
@@ -372,8 +422,335 @@
   "artifacts": [],
   "serve": {
     "baseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
-    "version": "170e07be2d98dd22"
+    "version": "61c9d38e313cda3f"
   },
   "proxies": [],
-  "version": "170e07be2d98dd22"
+  "access": {
+    "enforce": false,
+    "impersonators": "flag",
+    "blockedAgentUa": [],
+    "blockedAgentUaExact": [],
+    "blockedServeHumanUa": [],
+    "blockedServeHumanUaExact": [],
+    "blockedAgentKeys": [],
+    "routes": [],
+    "verification": {
+      "maxAgeSeconds": 604800,
+      "claims": [
+        [
+          "cohere-training-data-crawler",
+          "cohere-training-data-crawler"
+        ],
+        [
+          "google-cloudvertexbot",
+          "google-cloudvertexbot"
+        ],
+        [
+          "google-inspectiontool",
+          "googlebot"
+        ],
+        [
+          "gemini-deep-research",
+          "gemini-deep-research"
+        ],
+        [
+          "mediapartners-google",
+          "googlebot"
+        ],
+        [
+          "meta-externalfetcher",
+          "meta-externalfetcher"
+        ],
+        [
+          "facebookexternalhit",
+          "facebookexternalhit"
+        ],
+        [
+          "newrelic-synthetics",
+          "newrelic-synthetics"
+        ],
+        [
+          "meta-externalagent",
+          "meta-externalagent"
+        ],
+        [
+          "applebot-extended",
+          "applebot-extended"
+        ],
+        [
+          "better uptime bot",
+          "betteruptime"
+        ],
+        [
+          "chrome-lighthouse",
+          "lighthouse"
+        ],
+        [
+          "datadogsynthetics",
+          "datadog-synthetics"
+        ],
+        [
+          "google-notebooklm",
+          "google-notebooklm"
+        ],
+        [
+          "claude-searchbot",
+          "claude-searchbot"
+        ],
+        [
+          "facebookcatalog",
+          "facebookexternalhit"
+        ],
+        [
+          "google-extended",
+          "google-extended"
+        ],
+        [
+          "meta-webindexer",
+          "meta-webindexer"
+        ],
+        [
+          "perplexity-user",
+          "perplexity-user"
+        ],
+        [
+          "skypeuripreview",
+          "skypeuripreview"
+        ],
+        [
+          "storebot-google",
+          "googlebot"
+        ],
+        [
+          "yandex.com/bots",
+          "yandexbot"
+        ],
+        [
+          "amzn-searchbot",
+          "amzn-searchbot"
+        ],
+        [
+          "mistralai-user",
+          "mistralai-user"
+        ],
+        [
+          "newrelicpinger",
+          "newrelic-synthetics"
+        ],
+        [
+          "slack-imgproxy",
+          "slackbot"
+        ],
+        [
+          "adsbot-google",
+          "googlebot"
+        ],
+        [
+          "chatgpt agent",
+          "chatgpt-agent"
+        ],
+        [
+          "duckassistbot",
+          "duckassistbot"
+        ],
+        [
+          "oai-searchbot",
+          "oai-searchbot"
+        ],
+        [
+          "perplexitybot",
+          "perplexitybot"
+        ],
+        [
+          "anthropic-ai",
+          "anthropic-ai"
+        ],
+        [
+          "chatgpt-user",
+          "chatgpt-user"
+        ],
+        [
+          "google-agent",
+          "google-agent"
+        ],
+        [
+          "pinterestbot",
+          "pinterestbot"
+        ],
+        [
+          "yahoo! slurp",
+          "slurp"
+        ],
+        [
+          "baiduspider",
+          "baiduspider"
+        ],
+        [
+          "betterstack",
+          "betteruptime"
+        ],
+        [
+          "bingpreview",
+          "bingbot"
+        ],
+        [
+          "claude-user",
+          "claude-user"
+        ],
+        [
+          "duckduckbot",
+          "duckduckbot"
+        ],
+        [
+          "linkedinbot",
+          "linkedinbot"
+        ],
+        [
+          "telegrambot",
+          "telegrambot"
+        ],
+        [
+          "uptimerobot",
+          "uptimerobot"
+        ],
+        [
+          "bytespider",
+          "bytespider"
+        ],
+        [
+          "claude-web",
+          "claude-web"
+        ],
+        [
+          "discordbot",
+          "discordbot"
+        ],
+        [
+          "pinterest/",
+          "pinterestbot"
+        ],
+        [
+          "statuscake",
+          "statuscake"
+        ],
+        [
+          "twitterbot",
+          "twitterbot"
+        ],
+        [
+          "amazonbot",
+          "amazonbot"
+        ],
+        [
+          "amzn-user",
+          "amzn-user"
+        ],
+        [
+          "claudebot",
+          "claudebot"
+        ],
+        [
+          "cohere-ai",
+          "cohere-ai"
+        ],
+        [
+          "googlebot",
+          "googlebot"
+        ],
+        [
+          "omgilibot",
+          "omgilibot"
+        ],
+        [
+          "redditbot",
+          "redditbot"
+        ],
+        [
+          "seznambot",
+          "seznambot"
+        ],
+        [
+          "whatsapp/",
+          "whatsapp"
+        ],
+        [
+          "yandexbot",
+          "yandexbot"
+        ],
+        [
+          "adidxbot",
+          "bingbot"
+        ],
+        [
+          "applebot",
+          "applebot"
+        ],
+        [
+          "gtmetrix",
+          "gtmetrix"
+        ],
+        [
+          "naverbot",
+          "naverbot"
+        ],
+        [
+          "pangubot",
+          "pangubot"
+        ],
+        [
+          "site24x7",
+          "site24x7"
+        ],
+        [
+          "slackbot",
+          "slackbot"
+        ],
+        [
+          "timpibot",
+          "timpibot"
+        ],
+        [
+          "bingbot",
+          "bingbot"
+        ],
+        [
+          "diffbot",
+          "diffbot"
+        ],
+        [
+          "embedly",
+          "embedly"
+        ],
+        [
+          "pingdom",
+          "pingdom"
+        ],
+        [
+          "ai2bot",
+          "ai2bot"
+        ],
+        [
+          "gptbot",
+          "gptbot"
+        ],
+        [
+          "youbot",
+          "youbot"
+        ],
+        [
+          "ccbot",
+          "ccbot"
+        ],
+        [
+          "yeti/",
+          "naverbot"
+        ]
+      ],
+      "claimsExact": [],
+      "agentIpSets": {},
+      "ipSets": {},
+      "signatureAgents": []
+    }
+  },
+  "version": "61c9d38e313cda3f"
 }

@@ -24,7 +24,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { edge, calls } = harness();
     const res = await edge.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.3.1" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.4.0" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -41,7 +41,7 @@ describe("connectivity", () => {
     await edge.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.3.1" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.4.0" });
   });
 
   it("passes everything through when not configured", async () => {
@@ -131,7 +131,8 @@ describe("autopilot serving", () => {
     const { edge, calls } = harness({ serve: () => markdown() });
     const res = await edge.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA, "x-dedica-origin-fetch": "1" }), env, new FakeCtx());
     expect(await res.text()).toBe("origin page");
-    expect(calls).toHaveLength(0);
+    // Only the policy is fetched (Agent Access still applies to it); nothing is asked of Dedica's serve API.
+    expect(serveCalls(calls)).toHaveLength(0);
   });
 
   it("proxies managed artifacts for every visitor", async () => {
